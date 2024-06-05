@@ -6,3 +6,4 @@ opencv-python
 pandas
 streamlit-webrtc
 libgl1
+opencv-python-headless
