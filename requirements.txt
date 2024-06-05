@@ -2,7 +2,6 @@ streamlit
 mediapipe
 numpy
 tensorflow
-opencv-python
 pandas
 streamlit-webrtc
 libgl1
