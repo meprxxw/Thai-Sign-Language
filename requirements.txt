@@ -1,0 +1,4 @@
+mediapipe
+numpy
+tensorflow
+protobuf==3.20
