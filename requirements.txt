@@ -1,4 +1,8 @@
+streamlit
 mediapipe
 numpy
 tensorflow
 protobuf==3.20
+opencv-python
+temp
+json
