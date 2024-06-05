@@ -4,4 +4,3 @@ numpy
 tensorflow
 opencv-python
 temp
-protobuf==3.20
