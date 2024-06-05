@@ -1,8 +1,7 @@
 streamlit
-mediapipe==0.10.10
+mediapipe
 numpy
 tensorflow
 opencv-python
 temp
 protobuf==3.20
-pandas==2.2.2
