@@ -5,4 +5,3 @@ tensorflow
 protobuf==3.20
 opencv-python
 temp
-cv2
