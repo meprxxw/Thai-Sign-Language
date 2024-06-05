@@ -1,7 +1,7 @@
 import streamlit as st
 import mediapipe as mp
 import numpy as np
-import cv2
+
 
 st.title("Mediapipe Example")
 
