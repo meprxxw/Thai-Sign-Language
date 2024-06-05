@@ -4,4 +4,4 @@ numpy
 tensorflow
 opencv-python
 pandas
-libtk8.6
+streamlit-webrtc
