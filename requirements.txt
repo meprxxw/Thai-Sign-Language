@@ -1,6 +1,7 @@
-streamlit==1.34.0
+streamlit==1.35.0
 mediapipe==0.10.10
 numpy
 tensorflow
 opencv-python
 temp
+protobuf==3.20.0
