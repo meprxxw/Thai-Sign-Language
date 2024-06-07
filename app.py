@@ -34,7 +34,7 @@ class VideoTransformer(VideoTransformerBase):
         self.font_path = "./angsana.ttc"
         self.font_size = 32
         self.font = ImageFont.truetype(self.font_path, self.font_size)
-        self.interpreter = tf.lite.Interpreter(model_path="model-traintestflip.tflite")
+        self.interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
         self.interpreter.allocate_tensors()
         self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
         self.messages = []
