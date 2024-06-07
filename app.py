@@ -9,109 +9,80 @@ import pandas as pd
 import json
 import tempfile
 import os
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode
+from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
 
+# Mediapipe and drawing utilities
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
 
-ROWS_PER_FRAME = 543  # number of landmarks per frame
+# Constants
+ROWS_PER_FRAME = 543
 
-def mediapipe_detection(image, model):
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # color conversion
-    image.flags.writeable = False  # img no longer writeable
-    pred = model.process(image)  # make landmark prediction
-    image.flags.writeable = True  # img now writeable
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)  # color reconversion
-    return image, pred
-
-def draw(image, results):
-    mp_drawing.draw_landmarks(image, results.face_landmarks, mp_holistic.FACEMESH_TESSELATION,
-                              mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=3, circle_radius=3),
-                              mp_drawing.DrawingSpec(color=(0, 0, 0), thickness=1, circle_radius=0))
-    mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS,
-                              mp_drawing.DrawingSpec(color=(0, 150, 0), thickness=3, circle_radius=3),
-                              mp_drawing.DrawingSpec(color=(0, 0, 0), thickness=2, circle_radius=2))
-    mp_drawing.draw_landmarks(image, results.left_hand_landmarks, mp_holistic.HAND_CONNECTIONS,
-                              mp_drawing.DrawingSpec(color=(200, 56, 12), thickness=3, circle_radius=3),
-                              mp_drawing.DrawingSpec(color=(0, 0, 0), thickness=2, circle_radius=2))
-    mp_drawing.draw_landmarks(image, results.right_hand_landmarks, mp_holistic.HAND_CONNECTIONS,
-                              mp_drawing.DrawingSpec(color=(250, 56, 12), thickness=3, circle_radius=3),
-                              mp_drawing.DrawingSpec(color=(0, 0, 0), thickness=2, circle_radius=2))
-
-def extract_coordinates(results):
-    face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]) if results.face_landmarks else np.zeros((468, 3))
-    pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark]) if results.pose_landmarks else np.zeros((33, 3))
-    lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]) if results.left_hand_landmarks else np.zeros((21, 3))
-    rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
-    return np.concatenate([face, lh, pose, rh])
-
-def load_json_file(json_path):
-    with open(json_path, 'r') as f:
-        sign_map = json.load(f)
-    return sign_map
-
-def draw_text_on_image(image, text, position, font, color=(0, 255, 0)):
-    # Convert the OpenCV image (BGR) to a PIL image (RGB)
-    image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(image_pil)
-    draw.text(position, text, font=font, fill=color)
-    # Convert the PIL image back to an OpenCV image
-    image_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
-    return image_cv
-
-class CFG:
-    data_dir = ""
-    sequence_length = 12
-    rows_per_frame = 543
-
-def load_relevant_data_subset(pq_path):
-    data_columns = ['x', 'y', 'z']
-    data = pd.read_parquet(pq_path, columns=data_columns)
-    n_frames = int(len(data) / ROWS_PER_FRAME)
-    data = data.values.reshape(n_frames, ROWS_PER_FRAME, len(data_columns))
-    return data.astype(np.float32)
-
+# Load sign language mapping
 train = pd.read_csv('train.csv')
-
-# Add ordinally Encoded Sign (assign number to each sign name)
 train['sign_ord'] = train['sign'].astype('category').cat.codes
-
-# Dictionaries to translate sign <-> ordinal encoded sign
 SIGN2ORD = train[['sign', 'sign_ord']].set_index('sign').squeeze().to_dict()
 ORD2SIGN = train[['sign_ord', 'sign']].set_index('sign_ord').squeeze().to_dict()
 
 class VideoTransformer(VideoTransformerBase):
     def __init__(self):
-        model_path = "model-traintestflip.tflite"
-        if not os.path.exists(model_path):
-            raise ValueError(f"Model file not found at {model_path}")
-        self.interpreter = tf.lite.Interpreter(model_path=model_path)
+        self.holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self.sequence_data = []
+        self.last_prediction = None
+        self.last_prediction_time = 0
+        self.prediction_display_duration = 3  # seconds
+        self.font_path = "./angsana.ttc"
+        self.font_size = 32
+        self.font = ImageFont.truetype(self.font_path, self.font_size)
+        self.interpreter = tf.lite.Interpreter(model_path="model-traintestflip.tflite")
         self.interpreter.allocate_tensors()
-        self.input_details = self.interpreter.get_input_details()
-        self.output_details = self.interpreter.get_output_details()
-    
+        self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
+        self.messages = []
+
+    def mediapipe_detection(self, image):
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        results = self.holistic.process(image)
+        image.flags.writeable = True
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        return image, results
+
+    def draw_text_on_image(self, image, text, position, font, color=(0, 255, 0)):
+        image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(image_pil)
+        draw.text(position, text, font=font, fill=color)
+        image_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+        return image_cv
+
+    def extract_coordinates(self, results):
+        face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]) if results.face_landmarks else np.zeros((468, 3))
+        pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark]) if results.pose_landmarks else np.zeros((33, 3))
+        lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]) if results.left_hand_landmarks else np.zeros((21, 3))
+        rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
+        return np.concatenate([face, lh, pose, rh])
+
     def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        img.flags.writeable = False
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        image = frame.to_ndarray(format="bgr24")
+        image, results = self.mediapipe_detection(image)
+        landmarks = self.extract_coordinates(results)
+        self.sequence_data.append(landmarks)
 
-        # Process the image using MediaPipe
-        with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-            image, results = mediapipe_detection(img, holistic)
-            landmarks = extract_coordinates(results)
-        
-        if len(landmarks) % 30 == 0:
-            sequence_data = np.array([landmarks], dtype=np.float32)
-            self.interpreter.set_tensor(self.input_details[0]['index'], sequence_data)
-            self.interpreter.invoke()
-            prediction = self.interpreter.get_tensor(self.output_details[0]['index'])
-            sign = np.argmax(prediction)
+        if len(self.sequence_data) % 30 == 0:
+            prediction = self.prediction_fn(inputs=np.array(self.sequence_data, dtype=np.float32))
+            sign = np.argmax(prediction["outputs"])
             message = ORD2SIGN[sign]
-            img = draw_text_on_image(img, message, (3, 30), ImageFont.truetype("./angsana.ttc", 32), (0, 0, 0))
+            self.messages.append(message)
+            if len(self.messages) > 5:
+                self.messages.pop(0)
+            self.last_prediction = message
+            self.last_prediction_time = time.time()
+            self.sequence_data = []
 
-        return img
+        current_time = time.time()
+        if self.last_prediction and (current_time - self.last_prediction_time < self.prediction_display_duration):
+            image = self.draw_text_on_image(image, self.last_prediction, (3, 30), self.font, (0, 0, 0))
+
+        return image
 
 def main():
     st.header("Thai Sign Language Detection")
@@ -120,43 +91,21 @@ def main():
         "—": intro,
         "Detector": tsl,
         "Live Detector": live_detector,
-    }   
+    }
     app_mode = st.sidebar.selectbox("Choose the app mode", page_names_to_funcs.keys())
-
     st.subheader(app_mode)
 
-    if "run" not in st.session_state:
-        st.session_state.run = False
-
     if app_mode == "Live Detector":
-        if not st.session_state.run:
-            if st.button("Start TSL Detection", key="start_detection_button"):
-                st.session_state.run = True
-                st.experimental_rerun()
-        else:
-            if st.button("Stop TSL Detection", key="stop_detection_button"):
-                st.session_state.run = False
-                st.experimental_rerun()
-
-        if st.session_state.run:
-            live_detector()
+        live_detector()
     else:
         page_func = page_names_to_funcs[app_mode]
         page_func()
 
 def intro():
-    st.write(
-        """
-        This is an introduction to the Thai Sign Language Detection app.
-        """
-    )
+    st.write("Welcome to the Thai Sign Language Detector!")
 
 def tsl():
-    st.write(
-        """
-        This app allows you to upload a video file for Thai Sign Language detection.
-        """
-    )
+    st.write("This app allows you to upload a video file for Thai Sign Language detection.")
     interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
     interpreter.allocate_tensors()
     prediction_fn = interpreter.get_signature_runner("serving_default")
@@ -177,50 +126,6 @@ def tsl():
 
 def live_detector():
     webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_transformer_factory=VideoTransformer)
-
-def process_video(video_path, interpreter, prediction_fn):
-    sequence_data = []
-    cap = cv2.VideoCapture(video_path)
-
-    with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            image, results = mediapipe_detection(frame, holistic)
-            landmarks = extract_coordinates(results)
-            sequence_data.append(landmarks)
-
-        cap.release()
-    
-    if sequence_data:
-        sequence_data = np.array(sequence_data, dtype=np.float32)
-        prediction_fn(inputs=sequence_data)
-
-        prediction = interpreter.get_tensor(interpreter.get_output_details()[0]['index'])
-        sign = np.argmax(prediction)
-        message = ORD2SIGN[sign]
-        st.write(f"Predicted Sign: {message}")
-
-def record_video():
-    st.write("Recording...")
-    cap = cv2.VideoCapture(0)
-
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    out = cv2.VideoWriter('output.avi', fourcc, 20.0, (640, 480))
-
-    start_time = time.time()
-    while int(time.time() - start_time) < 10:  # record for 10 seconds
-        ret, frame = cap.read()
-        if not ret:
-            break
-        out.write(frame)
-
-    cap.release()
-    out.release()
-    st.write("Recording finished.")
-    return 'output.avi'
 
 if __name__ == "__main__":
     main()
