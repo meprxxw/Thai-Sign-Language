@@ -24,7 +24,7 @@ train['sign_ord'] = train['sign'].astype('category').cat.codes
 SIGN2ORD = train[['sign', 'sign_ord']].set_index('sign').squeeze().to_dict()
 ORD2SIGN = train[['sign_ord', 'sign']].set_index('sign_ord').squeeze().to_dict()
 
-class VideoTransformer(VideoTransformerBase):
+class VideoProcessor(VideoTransformerBase):
     def __init__(self):
         self.holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
         self.sequence_data = []
@@ -34,9 +34,18 @@ class VideoTransformer(VideoTransformerBase):
         self.font_path = "./angsana.ttc"
         self.font_size = 32
         self.font = ImageFont.truetype(self.font_path, self.font_size)
-        self.interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
-        self.interpreter.allocate_tensors()
-        self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
+        
+        model_path = "model-traintestflip.tflite"
+        if not os.path.exists(model_path):
+            raise ValueError(f"Model file not found at {model_path}")
+        
+        try:
+            self.interpreter = tf.lite.Interpreter(model_path=model_path)
+            self.interpreter.allocate_tensors()
+            self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
+        except Exception as e:
+            raise ValueError(f"Failed to load TFLite model. Error: {e}")
+        
         self.messages = []
 
     def mediapipe_detection(self, image):
@@ -68,15 +77,18 @@ class VideoTransformer(VideoTransformerBase):
         self.sequence_data.append(landmarks)
 
         if len(self.sequence_data) % 30 == 0:
-            prediction = self.prediction_fn(inputs=np.array(self.sequence_data, dtype=np.float32))
-            sign = np.argmax(prediction["outputs"])
-            message = ORD2SIGN[sign]
-            self.messages.append(message)
-            if len(self.messages) > 5:
-                self.messages.pop(0)
-            self.last_prediction = message
-            self.last_prediction_time = time.time()
-            self.sequence_data = []
+            try:
+                prediction = self.prediction_fn(inputs=np.array(self.sequence_data, dtype=np.float32))
+                sign = np.argmax(prediction["outputs"])
+                message = ORD2SIGN[sign]
+                self.messages.append(message)
+                if len(self.messages) > 5:
+                    self.messages.pop(0)
+                self.last_prediction = message
+                self.last_prediction_time = time.time()
+                self.sequence_data = []
+            except Exception as e:
+                st.error(f"Prediction error: {e}")
 
         current_time = time.time()
         if self.last_prediction and (current_time - self.last_prediction_time < self.prediction_display_duration):
@@ -106,9 +118,18 @@ def intro():
 
 def tsl():
     st.write("This app allows you to upload a video file for Thai Sign Language detection.")
-    interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
-    interpreter.allocate_tensors()
-    prediction_fn = interpreter.get_signature_runner("serving_default")
+    model_path = "model-withflip.tflite"
+    if not os.path.exists(model_path):
+        st.error(f"Model file not found at {model_path}")
+        return
+    
+    try:
+        interpreter = tf.lite.Interpreter(model_path=model_path)
+        interpreter.allocate_tensors()
+        prediction_fn = interpreter.get_signature_runner("serving_default")
+    except Exception as e:
+        st.error(f"Failed to load TFLite model. Error: {e}")
+        return
 
     option = st.radio("Choose input method:", ("Upload a video file", "Record from webcam"))
 
@@ -125,7 +146,7 @@ def tsl():
             os.remove(video_path)
 
 def live_detector():
-    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_transformer_factory=VideoTransformer)
+    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=VideoProcessor)
 
 if __name__ == "__main__":
     main()
