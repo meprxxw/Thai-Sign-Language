@@ -6,7 +6,6 @@ from PIL import Image, ImageDraw, ImageFont
 import time
 import tensorflow as tf
 import pandas as pd
-import tempfile
 import os
 from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
 
@@ -15,10 +14,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Mediapipe and drawing utilities
 mp_holistic = mp.solutions.holistic
-mp_drawing = mp.solutions.drawing_utils
-
-# Constants
-ROWS_PER_FRAME = 543
 
 # Load sign language mapping
 train = pd.read_csv('train.csv')
@@ -41,18 +36,12 @@ class VideoProcessor(VideoTransformerBase):
         if not os.path.exists(model_path):
             raise ValueError(f"Model file not found at {model_path}")
 
-        file_size = os.path.getsize(model_path)
-        if file_size < 7:
-            raise ValueError(f"Model file {model_path} is too small. Size: {file_size} bytes")
-
         try:
             self.interpreter = tf.lite.Interpreter(model_path=model_path)
             self.interpreter.allocate_tensors()
             self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
         except Exception as e:
             raise ValueError(f"Failed to load TFLite model. Error: {e}")
-
-        self.messages = []
 
     def mediapipe_detection(self, image):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -88,9 +77,6 @@ class VideoProcessor(VideoTransformerBase):
                 prediction = self.prediction_fn(inputs=input_data)
                 sign = np.argmax(prediction["outputs"])
                 message = ORD2SIGN[sign]
-                self.messages.append(message)
-                if len(self.messages) > 5:
-                    self.messages.pop(0)
                 self.last_prediction = message
                 self.last_prediction_time = time.time()
                 self.sequence_data = []  # Reset sequence data after prediction
@@ -103,58 +89,12 @@ class VideoProcessor(VideoTransformerBase):
 
         return image
 
+def live_detector():
+    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=VideoProcessor)
 
 def main():
     st.header("Thai Sign Language Detection")
-
-    page_names_to_funcs = {
-        "—": intro,
-        "Detector": tsl,
-        "Live Detector": live_detector,
-    }
-    app_mode = st.sidebar.selectbox("Choose the app mode", page_names_to_funcs.keys())
-    st.subheader(app_mode)
-
-    if app_mode == "Live Detector":
-        live_detector()
-    else:
-        page_func = page_names_to_funcs[app_mode]
-        page_func()
-
-def intro():
-    st.write("Welcome to the Thai Sign Language Detector!")
-
-def tsl():
-    st.write("This app allows you to upload a video file for Thai Sign Language detection.")
-    model_path = "model-withflip.tflite"
-    if not os.path.exists(model_path):
-        st.error(f"Model file not found at {model_path}")
-        return
-    
-    try:
-        interpreter = tf.lite.Interpreter(model_path=model_path)
-        interpreter.allocate_tensors()
-        prediction_fn = interpreter.get_signature_runner("serving_default")
-    except Exception as e:
-        st.error(f"Failed to load TFLite model. Error: {e}")
-        return
-
-    option = st.radio("Choose input method:", ("Upload a video file", "Record from webcam"))
-
-    if option == "Upload a video file":
-        video_file = st.file_uploader("Upload a video", type=["mp4", "mov", "avi", "mkv"])
-        if video_file is not None:
-            tfile = tempfile.NamedTemporaryFile(delete=False)
-            tfile.write(video_file.read())
-            process_video(tfile.name, interpreter, prediction_fn)
-    else:
-        if st.button("Start Recording", key="start_recording_button"):
-            video_path = record_video()
-            process_video(video_path, interpreter, prediction_fn)
-            os.remove(video_path)
-
-def live_detector():
-    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=VideoProcessor)
+    live_detector()
 
 if __name__ == "__main__":
     main()
