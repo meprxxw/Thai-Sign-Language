@@ -147,11 +147,80 @@ def main():
 def intro():
     st.write(
         """
-       
-    """
+        This is an introduction to the Thai Sign Language Detection app.
+        """
     )
 
 def tsl():
     st.write(
         """
-        This app allows you to upload a video
+        This app allows you to upload a video file for Thai Sign Language detection.
+        """
+    )
+    interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
+    interpreter.allocate_tensors()
+    prediction_fn = interpreter.get_signature_runner("serving_default")
+
+    option = st.radio("Choose input method:", ("Upload a video file", "Record from webcam"))
+
+    if option == "Upload a video file":
+        video_file = st.file_uploader("Upload a video", type=["mp4", "mov", "avi", "mkv"])
+        if video_file is not None:
+            tfile = tempfile.NamedTemporaryFile(delete=False)
+            tfile.write(video_file.read())
+            process_video(tfile.name, interpreter, prediction_fn)
+    else:
+        if st.button("Start Recording", key="start_recording_button"):
+            video_path = record_video()
+            process_video(video_path, interpreter, prediction_fn)
+            os.remove(video_path)
+
+def live_detector():
+    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_transformer_factory=VideoTransformer)
+
+def process_video(video_path, interpreter, prediction_fn):
+    sequence_data = []
+    cap = cv2.VideoCapture(video_path)
+
+    with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            image, results = mediapipe_detection(frame, holistic)
+            landmarks = extract_coordinates(results)
+            sequence_data.append(landmarks)
+
+        cap.release()
+    
+    if sequence_data:
+        sequence_data = np.array(sequence_data, dtype=np.float32)
+        prediction_fn(inputs=sequence_data)
+
+        prediction = interpreter.get_tensor(interpreter.get_output_details()[0]['index'])
+        sign = np.argmax(prediction)
+        message = ORD2SIGN[sign]
+        st.write(f"Predicted Sign: {message}")
+
+def record_video():
+    st.write("Recording...")
+    cap = cv2.VideoCapture(0)
+
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter('output.avi', fourcc, 20.0, (640, 480))
+
+    start_time = time.time()
+    while int(time.time() - start_time) < 10:  # record for 10 seconds
+        ret, frame = cap.read()
+        if not ret:
+            break
+        out.write(frame)
+
+    cap.release()
+    out.release()
+    st.write("Recording finished.")
+    return 'output.avi'
+
+if __name__ == "__main__":
+    main()
