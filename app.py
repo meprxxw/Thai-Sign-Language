@@ -82,9 +82,10 @@ class VideoProcessor(VideoTransformerBase):
         landmarks = self.extract_coordinates(results)
         self.sequence_data.append(landmarks)
 
-        if len(self.sequence_data) % 30 == 0:
+        if len(self.sequence_data) == 30:  # Process every 30 frames
             try:
-                prediction = self.prediction_fn(inputs=np.array(self.sequence_data, dtype=np.float32))
+                input_data = np.array([self.sequence_data], dtype=np.float32)  # Wrap in a list for batch processing
+                prediction = self.prediction_fn(inputs=input_data)
                 sign = np.argmax(prediction["outputs"])
                 message = ORD2SIGN[sign]
                 self.messages.append(message)
@@ -92,7 +93,7 @@ class VideoProcessor(VideoTransformerBase):
                     self.messages.pop(0)
                 self.last_prediction = message
                 self.last_prediction_time = time.time()
-                self.sequence_data = []
+                self.sequence_data = []  # Reset sequence data after prediction
             except Exception as e:
                 st.error(f"Prediction error: {e}")
 
@@ -101,6 +102,7 @@ class VideoProcessor(VideoTransformerBase):
             image = self.draw_text_on_image(image, self.last_prediction, (3, 30), self.font, (0, 0, 0))
 
         return image
+
 
 def main():
     st.header("Thai Sign Language Detection")
