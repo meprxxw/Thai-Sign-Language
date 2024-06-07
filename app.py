@@ -10,6 +10,9 @@ import tempfile
 import os
 from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
 
+# Suppress warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 # Mediapipe and drawing utilities
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
@@ -33,24 +36,22 @@ class VideoProcessor(VideoTransformerBase):
         self.font_path = "./angsana.ttc"
         self.font_size = 32
         self.font = ImageFont.truetype(self.font_path, self.font_size)
-        
+
         model_path = "model-withflip.tflite"
         if not os.path.exists(model_path):
             raise ValueError(f"Model file not found at {model_path}")
-        
+
         file_size = os.path.getsize(model_path)
-        print(f"Model file size: {file_size} bytes")
         if file_size < 7:
             raise ValueError(f"Model file {model_path} is too small. Size: {file_size} bytes")
-        
+
         try:
             self.interpreter = tf.lite.Interpreter(model_path=model_path)
             self.interpreter.allocate_tensors()
             self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
-            print("Model loaded successfully.")
         except Exception as e:
             raise ValueError(f"Failed to load TFLite model. Error: {e}")
-        
+
         self.messages = []
 
     def mediapipe_detection(self, image):
