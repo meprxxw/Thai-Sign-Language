@@ -6,7 +6,6 @@ from PIL import Image, ImageDraw, ImageFont
 import time
 import tensorflow as tf
 import pandas as pd
-import json
 import tempfile
 import os
 from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
@@ -39,10 +38,16 @@ class VideoProcessor(VideoTransformerBase):
         if not os.path.exists(model_path):
             raise ValueError(f"Model file not found at {model_path}")
         
+        file_size = os.path.getsize(model_path)
+        print(f"Model file size: {file_size} bytes")
+        if file_size < 7:
+            raise ValueError(f"Model file {model_path} is too small. Size: {file_size} bytes")
+        
         try:
             self.interpreter = tf.lite.Interpreter(model_path=model_path)
             self.interpreter.allocate_tensors()
             self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
+            print("Model loaded successfully.")
         except Exception as e:
             raise ValueError(f"Failed to load TFLite model. Error: {e}")
         
