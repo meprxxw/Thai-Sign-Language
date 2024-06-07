@@ -35,7 +35,7 @@ class VideoProcessor(VideoTransformerBase):
         self.font_size = 32
         self.font = ImageFont.truetype(self.font_path, self.font_size)
         
-        model_path = "model-traintestflip.tflite"
+        model_path = "model-withflip.tflite"
         if not os.path.exists(model_path):
             raise ValueError(f"Model file not found at {model_path}")
         
