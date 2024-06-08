@@ -106,6 +106,4 @@ def main():
     live_detector()
 
 if __name__ == "__main__":
-    main() its has no sign language came out transform() is deprecated. Implement recv() instead. 2024-06-08 00:50:09.169 Thread 'async_media_processor_6': missing ScriptRunContext
-
-2024-06-08 00:50:09.169 Thread 'async_media_processor_6': missing ScriptRunContext
+   main()
