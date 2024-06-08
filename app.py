@@ -17,9 +17,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
 
-# Constants
-ROWS_PER_FRAME = 543
-
 # Load sign language mapping
 train = pd.read_csv('train.csv')
 train['sign_ord'] = train['sign'].astype('category').cat.codes
@@ -103,6 +100,9 @@ class VideoProcessor(VideoTransformerBase):
 
         return image
 
+def live_detector():
+    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=VideoProcessor, rtc_configuration={ "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+
 
 def main():
     st.header("Thai Sign Language Detection")
@@ -153,9 +153,50 @@ def tsl():
             process_video(video_path, interpreter, prediction_fn)
             os.remove(video_path)
 
-def live_detector():
-    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=VideoProcessor, rtc_configuration={ "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+def process_video(video_path, interpreter, prediction_fn):
+    # Process the video with Mediapipe and the model
+    cap = cv2.VideoCapture(video_path)
+    holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    sequence_data = []
 
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        image, results = mediapipe_detection(frame, holistic)
+        landmarks = extract_coordinates(results)
+        sequence_data.append(landmarks)
+
+        if len(sequence_data) == 30:  # Process every 30 frames
+            input_data = np.array([sequence_data], dtype=np.float32)  # Wrap in a list for batch processing
+            prediction = prediction_fn(inputs=input_data)
+            sign = np.argmax(prediction["outputs"])
+            message = ORD2SIGN[sign]
+            st.write(f"Detected Sign: {message}")
+            sequence_data = []  # Reset sequence data after prediction
+
+    cap.release()
+
+def mediapipe_detection(image, holistic):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image.flags.writeable = False
+    results = holistic.process(image)
+    image.flags.writeable = True
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    return image, results
+
+def extract_coordinates(results):
+    face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]) if results.face_landmarks else np.zeros((468, 3))
+    pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark]) if results.pose_landmarks else np.zeros((33, 3))
+    lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]) if results.left_hand_landmarks else np.zeros((21, 3))
+    rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
+    return np.concatenate([face, lh, pose, rh])
+
+def record_video():
+    # Logic to record video using webcam
+    # Implement as needed, possibly using OpenCV or other libraries
+    pass
 
 if __name__ == "__main__":
     main()
