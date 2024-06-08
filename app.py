@@ -9,8 +9,8 @@ import pandas as pd
 import os
 from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
 
-# Suppress warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# # Suppress warnings
+# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Mediapipe and drawing utilities
 mp_holistic = mp.solutions.holistic
@@ -35,7 +35,7 @@ class VideoProcessor(VideoTransformerBase):
         self.font_path = "./angsana.ttc"
         self.font_size = 32
         self.font = ImageFont.truetype(self.font_path, self.font_size)
-        
+
         model_path = "model-withflip.tflite"
         if not os.path.exists(model_path):
             raise ValueError(f"Model file not found at {model_path}")
@@ -71,12 +71,11 @@ class VideoProcessor(VideoTransformerBase):
         rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
         return np.concatenate([face, lh, pose, rh])
 
-    def transform(self, frame):
+    def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
         image, results = self.mediapipe_detection(image)
         landmarks = self.extract_coordinates(results)
         self.sequence_data.append(landmarks)
-        self.messages.append("test")
 
         if len(self.sequence_data) == 30:  # Process every 30 frames
             try:
