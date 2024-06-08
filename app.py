@@ -1,233 +1,119 @@
-
 import streamlit as st
 import mediapipe as mp
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-import time
 import tensorflow as tf
 import pandas as pd
+import json
 import tempfile
 import os
-from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
-import copy
-from multiprocessing import Queue, Process
-from typing import NamedTuple, List
-
-import streamlit as st
-from streamlit_webrtc import VideoProcessorBase, webrtc_streamer, WebRtcMode, ClientSettings
-
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration, WebRtcMode
 import av
-import cv2 as cv
-import numpy as np
-import mediapipe as mp
 
-from utils import CvFpsCalc
-from main import draw_landmarks, draw_stick_figure
-
-from fake_objects import FakeResultObject, FakeLandmarksObject, FakeLandmarkObject
-
-from turn import get_ice_servers
-
-
-_SENTINEL_ = "_SENTINEL_"
-
-# Suppress warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
-# Mediapipe and drawing utilities
+# Initialize MediaPipe holistic model
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
 
-# Constants
-ROWS_PER_FRAME = 543
+ROWS_PER_FRAME = 543  # Number of landmarks per frame
 
-# Load sign language mapping
+def mediapipe_detection(image, model):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Color conversion
+    image.flags.writeable = False  # Image no longer writeable
+    results = model.process(image)  # Make landmark prediction
+    image.flags.writeable = True  # Image now writeable
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)  # Color reconversion
+    return image, results
+
+def extract_coordinates(results):
+    face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]) if results.face_landmarks else np.zeros((468, 3))
+    pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark]) if results.pose_landmarks else np.zeros((33, 3))
+    lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]) if results.left_hand_landmarks else np.zeros((21, 3))
+    rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
+    return np.concatenate([face, lh, pose, rh])
+
+def load_json_file(json_path):
+    with open(json_path, 'r') as f:
+        sign_map = json.load(f)
+    return sign_map
+
+def load_relevant_data_subset(pq_path):
+    data_columns = ['x', 'y', 'z']
+    data = pd.read_parquet(pq_path, columns=data_columns)
+    n_frames = int(len(data) / ROWS_PER_FRAME)
+    data = data.values.reshape(n_frames, ROWS_PER_FRAME, len(data_columns))
+    return data.astype(np.float32)
+
 train = pd.read_csv('train.csv')
+
+# Add ordinally encoded sign (assign number to each sign name)
 train['sign_ord'] = train['sign'].astype('category').cat.codes
+
+# Dictionaries to translate sign <-> ordinal encoded sign
 SIGN2ORD = train[['sign', 'sign_ord']].set_index('sign').squeeze().to_dict()
 ORD2SIGN = train[['sign_ord', 'sign']].set_index('sign_ord').squeeze().to_dict()
 
-class FakeLandmarkObject:
-    def __init__(self, x, y, z):
-        self.x = x
-        self.y = y
-        self.z = z
-
-class FakeLandmarksObject:
-    def __init__(self, landmark):
-        self.landmark = landmark
-
-class FakeResultObject:
-    def __init__(self, face_landmarks, left_hand_landmarks, pose_landmarks, right_hand_landmarks):
-        self.face_landmarks = face_landmarks
-        self.left_hand_landmarks = left_hand_landmarks
-        self.pose_landmarks = pose_landmarks
-        self.right_hand_landmarks = right_hand_landmarks
-
-def pose_process(
-    in_queue: Queue,
-    out_queue: Queue,
-    static_image_mode,
-    model_complexity,
-    min_detection_confidence,
-    min_tracking_confidence,
-):
-    mp_holistic = mp.solutions.holistic
-    holistic = mp_holistic.Holistic(
-        static_image_mode=static_image_mode,
-        model_complexity=model_complexity,
-        min_detection_confidence=min_detection_confidence,
-        min_tracking_confidence=min_tracking_confidence,
-    )
-
-    while True:
-        input_item = in_queue.get(timeout=10)
-        if isinstance(input_item, type(_SENTINEL_)) and input_item == _SENTINEL_:
-            break
-
-        results = holistic.process(input_item)
-        picklable_results = FakeResultObject(
-            face_landmarks=FakeLandmarksObject(landmark=[
-                FakeLandmarkObject(
-                    x=landmark.x,
-                    y=landmark.y,
-                    z=landmark.z,
-                ) for landmark in results.face_landmarks.landmark
-            ]) if results.face_landmarks else None,
-            left_hand_landmarks=FakeLandmarksObject(landmark=[
-                FakeLandmarkObject(
-                    x=landmark.x,
-                    y=landmark.y,
-                    z=landmark.z,
-                ) for landmark in results.left_hand_landmarks.landmark
-            ]) if results.left_hand_landmarks else None,
-            pose_landmarks=FakeLandmarksObject(landmark=[
-                FakeLandmarkObject(
-                    x=landmark.x,
-                    y=landmark.y,
-                    z=landmark.z,
-                ) for landmark in results.pose_landmarks.landmark
-            ]) if results.pose_landmarks else None,
-            right_hand_landmarks=FakeLandmarksObject(landmark=[
-                FakeLandmarkObject(
-                    x=landmark.x,
-                    y=landmark.y,
-                    z=landmark.z,
-                ) for landmark in results.right_hand_landmarks.landmark
-            ]) if results.right_hand_landmarks else None,
-        )
-        out_queue.put_nowait(picklable_results)
-        
-class VideoProcessor(VideoTransformerBase):
+class VideoRecorder(VideoProcessorBase):
     def __init__(self):
-        self._in_queue = Queue()
-        self._out_queue = Queue()
-        self._pose_process = Process(target=pose_process, kwargs={
-            "in_queue": self._in_queue,
-            "out_queue": self._out_queue,
-            "static_image_mode": False,
-            "model_complexity": 1,
-            "min_detection_confidence": 0.5,
-            "min_tracking_confidence": 0.5,
-        })
+        self.recording = False
+        self.frames = []
 
-        self._pose_process.start()
-        self.sequence_data = []
-        self.last_prediction = None
-        self.last_prediction_time = 0
-        self.prediction_display_duration = 3  # seconds
-        self.font_path = "./angsana.ttc"
-        self.font_size = 32
-        self.font = ImageFont.truetype(self.font_path, self.font_size)
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        if self.recording:
+            self.frames.append(img)
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-        model_path = "model-withflip.tflite"
+    def start_recording(self):
+        self.recording = True
+        self.frames = []
 
-    def __del__(self):
-        self._in_queue.put_nowait(_SENTINEL_)
-        self._pose_process.join(timeout=10)
+    def stop_recording(self):
+        self.recording = False
+        video_path = 'recorded_video.mp4'
+        out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 20, (640, 480))
+        for frame in self.frames:
+            out.write(frame)
+        out.release()
+        return video_path
 
-    def draw_text_on_image(self, image, text, position, font, color=(0, 255, 0)):
-        image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        draw = ImageDraw.Draw(image_pil)
-        draw.text(position, text, font=font, fill=color)
-        image_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
-        return image_cv
+def process_video(video_path, interpreter, prediction_fn):
+    sequence_data = []
+    cap = cv2.VideoCapture(video_path)
 
-    def extract_coordinates(self, results):
-        face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]) if results.face_landmarks else np.zeros((468, 3))
-        lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]) if results.left_hand_landmarks else np.zeros((21, 3))
-        pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark]) if results.pose_landmarks else np.zeros((33, 3))
-        rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
-        return np.concatenate([face, lh, pose, rh])
+    with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        image = frame.to_ndarray(format="bgr24")
-        self._in_queue.put_nowait(image)
+            image, results = mediapipe_detection(frame, holistic)
+            landmarks = extract_coordinates(results)
+            sequence_data.append(landmarks)
 
-        try:
-            results = self._out_queue.get(timeout=10)
-        except Queue.Empty:
-            return av.VideoFrame.from_ndarray(image, format="bgr24")
-
-        landmarks = self.extract_coordinates(results)
-        self.sequence_data.append(landmarks)
-
-        if len(self.sequence_data) == 30:  # Process every 30 frames
-            try:
-                input_data = np.array([self.sequence_data], dtype=np.float32)  # Wrap in a list for batch processing
-                prediction = self.prediction_fn(inputs=input_data)
-                sign = np.argmax(prediction["outputs"])
-                message = ORD2SIGN[sign]
-                self.last_prediction = message
-                self.last_prediction_time = time.time()
-                self.sequence_data = []  # Reset sequence data after prediction
-            except Exception as e:
-                st.error(f"Prediction error: {e}")
-
-        current_time = time.time()
-        if self.last_prediction and (current_time - self.last_prediction_time < self.prediction_display_duration):
-            image = self.draw_text_on_image(image, self.last_prediction, (3, 30), self.font, (0, 0, 0))
-
-        return av.VideoFrame.from_ndarray(image, format="bgr24")
-
-
-
-def main():
-    st.header("Thai Sign Language Detection")
-
-    page_names_to_funcs = {
-        "—": intro,
-        "Detector": tsl,
-        "Live Detector": live_detector,
-    }
-    app_mode = st.sidebar.selectbox("Choose the app mode", page_names_to_funcs.keys())
-    st.subheader(app_mode)
-
-    if app_mode == "Live Detector":
-        live_detector()
-    else:
-        page_func = page_names_to_funcs[app_mode]
-        page_func()
+        cap.release()
+    
+    if sequence_data:
+        sequence_data = np.array(sequence_data, dtype=np.float32)
+        prediction = prediction_fn(inputs=sequence_data)
+        sign = np.argmax(prediction["outputs"])
+        st.write(f"Predicted Sign: {ORD2SIGN[sign]}")
 
 def intro():
-    st.write("Welcome to the Thai Sign Language Detector!")
+    st.write(
+        """
+        Welcome to the Thai Sign Language Detection App.
+    """
+    )
 
 def tsl():
-    st.write("This app allows you to upload a video file for Thai Sign Language detection.")
-    model_path = "model-withflip.tflite"
-    if not os.path.exists(model_path):
-        st.error(f"Model file not found at {model_path}")
-        return
-    
-    try:
-        interpreter = tf.lite.Interpreter(model_path=model_path)
-        interpreter.allocate_tensors()
-        prediction_fn = interpreter.get_signature_runner("serving_default")
-    except Exception as e:
-        st.error(f"Failed to load TFLite model. Error: {e}")
-        return
-
+    st.write(
+        """
+        This app allows you to upload a video file or record from webcam for Thai Sign Language detection.
+        """
+    )
+    interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
+    interpreter.allocate_tensors()
+    prediction_fn = interpreter.get_signature_runner("serving_default")
     option = st.radio("Choose input method:", ("Upload a video file", "Record from webcam"))
 
     if option == "Upload a video file":
@@ -235,16 +121,52 @@ def tsl():
         if video_file is not None:
             tfile = tempfile.NamedTemporaryFile(delete=False)
             tfile.write(video_file.read())
+            st.write("Processing video...")
             process_video(tfile.name, interpreter, prediction_fn)
     else:
-        if st.button("Start Recording", key="start_recording_button"):
-            video_path = record_video()
+        global video_recorder
+        if not video_recorder:
+            video_recorder = VideoRecorder()
+
+        ctx = webrtc_streamer(key="example", 
+                              mode=WebRtcMode.SENDRECV,
+                              video_processor_factory=lambda: video_recorder,
+                              rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}))
+        
+        if ctx.state.playing:
+            if not video_recorder.recording:
+                video_recorder.start_recording()
+                st.write("Started recording...")
+            else:
+                st.write("Already recording...")
+        else:
+            st.write("Stopping recording...")
+            video_path = video_recorder.stop_recording()
+            st.write("Processing video...")
+            # Display processed video
+            with open(video_path, "rb") as f:
+                video_bytes = f.read()
+            st.video(video_bytes)
             process_video(video_path, interpreter, prediction_fn)
             os.remove(video_path)
+             
+    
+# Initialize VideoRecorder
+video_recorder = None
 
-def live_detector():
-    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=VideoProcessor, rtc_configuration={ "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+def main():
+    st.header("Thai Sign Language Detection")
 
+    page_names_to_funcs = {
+        "—": intro,
+        "Detector": tsl,
+    }
+    app_mode = st.sidebar.selectbox("Choose the app mode", page_names_to_funcs.keys())
+
+    st.subheader(app_mode)
+
+    page_func = page_names_to_funcs[app_mode]
+    page_func()
 
 if __name__ == "__main__":
     main()
