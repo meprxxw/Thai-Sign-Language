@@ -5,4 +5,3 @@ tensorflow
 pandas
 streamlit-webrtc
 opencv-python-headless
-os
