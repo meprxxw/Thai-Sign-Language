@@ -124,36 +124,33 @@ def tsl():
             st.write("Processing video...")
             process_video(tfile.name, interpreter, prediction_fn)
     else:
-        global video_recorder
-        if not video_recorder:
-            video_recorder = VideoRecorder()
+        if 'video_recorder' not in st.session_state:
+            st.session_state.video_recorder = VideoRecorder()
 
         ctx = webrtc_streamer(key="example", 
                               mode=WebRtcMode.SENDRECV,
-                              video_processor_factory=lambda: video_recorder,
+                              video_processor_factory=lambda: st.session_state.video_recorder,
                               rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}))
         
         if ctx.state.playing:
-            if not video_recorder.recording:
-                video_recorder.start_recording()
+            if not st.session_state.video_recorder.recording:
+                st.session_state.video_recorder.start_recording()
                 st.write("Started recording...")
             else:
                 st.write("Already recording...")
         else:
-            st.write("Stopping recording...")
-            video_path = video_recorder.stop_recording()
-            st.write("Processing video...")
-            # Display processed video
-            with open(video_path, "rb") as f:
-                video_bytes = f.read()
-            st.video(video_bytes)
-            process_video(video_path, interpreter, prediction_fn)
-            os.remove(video_path)
+            if st.session_state.video_recorder.recording:
+                st.write("Stopping recording...")
+                video_path = st.session_state.video_recorder.stop_recording()
+                st.write("Processing video...")
+                # Display processed video
+                with open(video_path, "rb") as f:
+                    video_bytes = f.read()
+                st.video(video_bytes)
+                process_video(video_path, interpreter, prediction_fn)
+                os.remove(video_path)
              
     
-# Initialize VideoRecorder
-video_recorder = None
-
 def main():
     st.header("Thai Sign Language Detection")
 
