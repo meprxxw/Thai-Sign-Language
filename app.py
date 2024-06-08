@@ -2,13 +2,14 @@ import streamlit as st
 import mediapipe as mp
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 import time
 import tensorflow as tf
 import pandas as pd
-import tempfile
-import os
+from queue import Queue
+from multiprocessing import Process
+from PIL import Image, ImageDraw, ImageFont
 from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
+import av
 
 # Suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -23,9 +24,74 @@ train['sign_ord'] = train['sign'].astype('category').cat.codes
 SIGN2ORD = train[['sign', 'sign_ord']].set_index('sign').squeeze().to_dict()
 ORD2SIGN = train[['sign_ord', 'sign']].set_index('sign_ord').squeeze().to_dict()
 
+# Define a sentinel object for stopping the subprocess
+_SENTINEL_ = object()
+
+class FakeLandmarkObject:
+    def __init__(self, x, y, z, visibility):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.visibility = visibility
+
+class FakeLandmarksObject:
+    def __init__(self, landmark):
+        self.landmark = landmark
+
+class FakeResultObject:
+    def __init__(self, pose_landmarks):
+        self.pose_landmarks = pose_landmarks
+
+def pose_process(
+    in_queue: Queue,
+    out_queue: Queue,
+    static_image_mode,
+    model_complexity,
+    min_detection_confidence,
+    min_tracking_confidence,
+):
+    mp_pose = mp.solutions.pose
+    pose = mp_pose.Pose(
+        static_image_mode=static_image_mode,
+        model_complexity=model_complexity,
+        min_detection_confidence=min_detection_confidence,
+        min_tracking_confidence=min_tracking_confidence,
+    )
+
+    while True:
+        input_item = in_queue.get(timeout=10)
+        if isinstance(input_item, type(_SENTINEL_)) and input_item == _SENTINEL_:
+            break
+
+        results = pose.process(input_item)
+        if results.pose_landmarks:
+            picklable_results = FakeResultObject(pose_landmarks=FakeLandmarksObject(landmark=[
+                FakeLandmarkObject(
+                    x=pose_landmark.x,
+                    y=pose_landmark.y,
+                    z=pose_landmark.z,
+                    visibility=pose_landmark.visibility,
+                ) for pose_landmark in results.pose_landmarks.landmark
+            ]))
+        else:
+            picklable_results = FakeResultObject(pose_landmarks=None)
+
+        out_queue.put_nowait(picklable_results)
+
 class VideoProcessor(VideoTransformerBase):
     def __init__(self):
-        self.holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self._in_queue = Queue()
+        self._out_queue = Queue()
+        self._pose_process = Process(target=pose_process, kwargs={
+            "in_queue": self._in_queue,
+            "out_queue": self._out_queue,
+            "static_image_mode": False,
+            "model_complexity": 1,
+            "min_detection_confidence": 0.5,
+            "min_tracking_confidence": 0.5,
+        })
+
+        self._pose_process.start()
         self.sequence_data = []
         self.last_prediction = None
         self.last_prediction_time = 0
@@ -49,15 +115,9 @@ class VideoProcessor(VideoTransformerBase):
         except Exception as e:
             raise ValueError(f"Failed to load TFLite model. Error: {e}")
 
-        self.messages = []
-
-    def mediapipe_detection(self, image):
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image.flags.writeable = False
-        results = self.holistic.process(image)
-        image.flags.writeable = True
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        return image, results
+    def __del__(self):
+        self._in_queue.put_nowait(_SENTINEL_)
+        self._pose_process.join(timeout=10)
 
     def draw_text_on_image(self, image, text, position, font, color=(0, 255, 0)):
         image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
@@ -67,15 +127,21 @@ class VideoProcessor(VideoTransformerBase):
         return image_cv
 
     def extract_coordinates(self, results):
-        face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]) if results.face_landmarks else np.zeros((468, 3))
-        pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark]) if results.pose_landmarks else np.zeros((33, 3))
-        lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]) if results.left_hand_landmarks else np.zeros((21, 3))
-        rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
-        return np.concatenate([face, lh, pose, rh])
+        if results.pose_landmarks:
+            pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark])
+        else:
+            pose = np.zeros((33, 3))
+        return pose
 
-    def recv(self, frame):
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         image = frame.to_ndarray(format="bgr24")
-        image, results = self.mediapipe_detection(image)
+        self._in_queue.put_nowait(image)
+
+        try:
+            results = self._out_queue.get(timeout=10)
+        except Queue.Empty:
+            return av.VideoFrame.from_ndarray(image, format="bgr24")
+
         landmarks = self.extract_coordinates(results)
         self.sequence_data.append(landmarks)
 
@@ -85,9 +151,6 @@ class VideoProcessor(VideoTransformerBase):
                 prediction = self.prediction_fn(inputs=input_data)
                 sign = np.argmax(prediction["outputs"])
                 message = ORD2SIGN[sign]
-                self.messages.append(message)
-                if len(self.messages) > 5:
-                    self.messages.pop(0)
                 self.last_prediction = message
                 self.last_prediction_time = time.time()
                 self.sequence_data = []  # Reset sequence data after prediction
@@ -98,11 +161,15 @@ class VideoProcessor(VideoTransformerBase):
         if self.last_prediction and (current_time - self.last_prediction_time < self.prediction_display_duration):
             image = self.draw_text_on_image(image, self.last_prediction, (3, 30), self.font, (0, 0, 0))
 
-        return image
+        return av.VideoFrame.from_ndarray(image, format="bgr24")
 
 def live_detector():
-    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=VideoProcessor, rtc_configuration={ "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
-
+    webrtc_streamer(
+        key="example",
+        mode=WebRtcMode.SENDRECV,
+        video_processor_factory=VideoProcessor,
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    )
 
 def main():
     st.header("Thai Sign Language Detection")
@@ -169,7 +236,7 @@ def process_video(video_path, interpreter, prediction_fn):
         sequence_data.append(landmarks)
 
         if len(sequence_data) == 30:  # Process every 30 frames
-            input_data = np.array([sequence_data], dtype=np.float32)  # Wrap in a list for batch processing
+            input_data = np.array([sequence_data], dtype=np.float32)  # Wrap in a list
             prediction = prediction_fn(inputs=input_data)
             sign = np.argmax(prediction["outputs"])
             message = ORD2SIGN[sign]
