@@ -35,7 +35,7 @@ class VideoProcessor(VideoTransformerBase):
         self.font_path = "./angsana.ttc"
         self.font_size = 32
         self.font = ImageFont.truetype(self.font_path, self.font_size)
-        self.messages.append("test")
+        
         model_path = "model-withflip.tflite"
         if not os.path.exists(model_path):
             raise ValueError(f"Model file not found at {model_path}")
@@ -76,6 +76,7 @@ class VideoProcessor(VideoTransformerBase):
         image, results = self.mediapipe_detection(image)
         landmarks = self.extract_coordinates(results)
         self.sequence_data.append(landmarks)
+        self.messages.append("test")
 
         if len(self.sequence_data) == 30:  # Process every 30 frames
             try:
