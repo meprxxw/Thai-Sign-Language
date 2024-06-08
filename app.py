@@ -12,7 +12,7 @@ from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
 import av
 
 # Suppress warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Mediapipe and drawing utilities
 mp_holistic = mp.solutions.holistic
