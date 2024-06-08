@@ -1,3 +1,4 @@
+
 import streamlit as st
 import mediapipe as mp
 import cv2
@@ -9,6 +10,27 @@ import pandas as pd
 import tempfile
 import os
 from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
+import copy
+from multiprocessing import Queue, Process
+from typing import NamedTuple, List
+
+import streamlit as st
+from streamlit_webrtc import VideoProcessorBase, webrtc_streamer, WebRtcMode, ClientSettings
+
+import av
+import cv2 as cv
+import numpy as np
+import mediapipe as mp
+
+from utils import CvFpsCalc
+from main import draw_landmarks, draw_stick_figure
+
+from fake_objects import FakeResultObject, FakeLandmarksObject, FakeLandmarkObject
+
+from turn import get_ice_servers
+
+
+_SENTINEL_ = "_SENTINEL_"
 
 # Suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -26,9 +48,91 @@ train['sign_ord'] = train['sign'].astype('category').cat.codes
 SIGN2ORD = train[['sign', 'sign_ord']].set_index('sign').squeeze().to_dict()
 ORD2SIGN = train[['sign_ord', 'sign']].set_index('sign_ord').squeeze().to_dict()
 
+class FakeLandmarkObject:
+    def __init__(self, x, y, z):
+        self.x = x
+        self.y = y
+        self.z = z
+
+class FakeLandmarksObject:
+    def __init__(self, landmark):
+        self.landmark = landmark
+
+class FakeResultObject:
+    def __init__(self, face_landmarks, left_hand_landmarks, pose_landmarks, right_hand_landmarks):
+        self.face_landmarks = face_landmarks
+        self.left_hand_landmarks = left_hand_landmarks
+        self.pose_landmarks = pose_landmarks
+        self.right_hand_landmarks = right_hand_landmarks
+
+def pose_process(
+    in_queue: Queue,
+    out_queue: Queue,
+    static_image_mode,
+    model_complexity,
+    min_detection_confidence,
+    min_tracking_confidence,
+):
+    mp_holistic = mp.solutions.holistic
+    holistic = mp_holistic.Holistic(
+        static_image_mode=static_image_mode,
+        model_complexity=model_complexity,
+        min_detection_confidence=min_detection_confidence,
+        min_tracking_confidence=min_tracking_confidence,
+    )
+
+    while True:
+        input_item = in_queue.get(timeout=10)
+        if isinstance(input_item, type(_SENTINEL_)) and input_item == _SENTINEL_:
+            break
+
+        results = holistic.process(input_item)
+        picklable_results = FakeResultObject(
+            face_landmarks=FakeLandmarksObject(landmark=[
+                FakeLandmarkObject(
+                    x=landmark.x,
+                    y=landmark.y,
+                    z=landmark.z,
+                ) for landmark in results.face_landmarks.landmark
+            ]) if results.face_landmarks else None,
+            left_hand_landmarks=FakeLandmarksObject(landmark=[
+                FakeLandmarkObject(
+                    x=landmark.x,
+                    y=landmark.y,
+                    z=landmark.z,
+                ) for landmark in results.left_hand_landmarks.landmark
+            ]) if results.left_hand_landmarks else None,
+            pose_landmarks=FakeLandmarksObject(landmark=[
+                FakeLandmarkObject(
+                    x=landmark.x,
+                    y=landmark.y,
+                    z=landmark.z,
+                ) for landmark in results.pose_landmarks.landmark
+            ]) if results.pose_landmarks else None,
+            right_hand_landmarks=FakeLandmarksObject(landmark=[
+                FakeLandmarkObject(
+                    x=landmark.x,
+                    y=landmark.y,
+                    z=landmark.z,
+                ) for landmark in results.right_hand_landmarks.landmark
+            ]) if results.right_hand_landmarks else None,
+        )
+        out_queue.put_nowait(picklable_results)
+        
 class VideoProcessor(VideoTransformerBase):
     def __init__(self):
-        self.holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self._in_queue = Queue()
+        self._out_queue = Queue()
+        self._pose_process = Process(target=pose_process, kwargs={
+            "in_queue": self._in_queue,
+            "out_queue": self._out_queue,
+            "static_image_mode": False,
+            "model_complexity": 1,
+            "min_detection_confidence": 0.5,
+            "min_tracking_confidence": 0.5,
+        })
+
+        self._pose_process.start()
         self.sequence_data = []
         self.last_prediction = None
         self.last_prediction_time = 0
@@ -38,29 +142,10 @@ class VideoProcessor(VideoTransformerBase):
         self.font = ImageFont.truetype(self.font_path, self.font_size)
 
         model_path = "model-withflip.tflite"
-        if not os.path.exists(model_path):
-            raise ValueError(f"Model file not found at {model_path}")
 
-        file_size = os.path.getsize(model_path)
-        if file_size < 7:
-            raise ValueError(f"Model file {model_path} is too small. Size: {file_size} bytes")
-
-        try:
-            self.interpreter = tf.lite.Interpreter(model_path=model_path)
-            self.interpreter.allocate_tensors()
-            self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
-        except Exception as e:
-            raise ValueError(f"Failed to load TFLite model. Error: {e}")
-
-        self.messages = []
-
-    def mediapipe_detection(self, image):
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image.flags.writeable = False
-        results = self.holistic.process(image)
-        image.flags.writeable = True
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        return image, results
+    def __del__(self):
+        self._in_queue.put_nowait(_SENTINEL_)
+        self._pose_process.join(timeout=10)
 
     def draw_text_on_image(self, image, text, position, font, color=(0, 255, 0)):
         image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
@@ -71,14 +156,20 @@ class VideoProcessor(VideoTransformerBase):
 
     def extract_coordinates(self, results):
         face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]) if results.face_landmarks else np.zeros((468, 3))
-        pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark]) if results.pose_landmarks else np.zeros((33, 3))
         lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]) if results.left_hand_landmarks else np.zeros((21, 3))
+        pose = np.array([[res.x, res.y, res.z] for res in results.pose_landmarks.landmark]) if results.pose_landmarks else np.zeros((33, 3))
         rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
         return np.concatenate([face, lh, pose, rh])
 
-    def transform(self, frame):
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         image = frame.to_ndarray(format="bgr24")
-        image, results = self.mediapipe_detection(image)
+        self._in_queue.put_nowait(image)
+
+        try:
+            results = self._out_queue.get(timeout=10)
+        except Queue.Empty:
+            return av.VideoFrame.from_ndarray(image, format="bgr24")
+
         landmarks = self.extract_coordinates(results)
         self.sequence_data.append(landmarks)
 
@@ -88,9 +179,6 @@ class VideoProcessor(VideoTransformerBase):
                 prediction = self.prediction_fn(inputs=input_data)
                 sign = np.argmax(prediction["outputs"])
                 message = ORD2SIGN[sign]
-                self.messages.append(message)
-                if len(self.messages) > 5:
-                    self.messages.pop(0)
                 self.last_prediction = message
                 self.last_prediction_time = time.time()
                 self.sequence_data = []  # Reset sequence data after prediction
@@ -101,7 +189,8 @@ class VideoProcessor(VideoTransformerBase):
         if self.last_prediction and (current_time - self.last_prediction_time < self.prediction_display_duration):
             image = self.draw_text_on_image(image, self.last_prediction, (3, 30), self.font, (0, 0, 0))
 
-        return image
+        return av.VideoFrame.from_ndarray(image, format="bgr24")
+
 
 
 def main():
