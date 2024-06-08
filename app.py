@@ -35,7 +35,7 @@ class VideoProcessor(VideoTransformerBase):
         self.font_path = "./angsana.ttc"
         self.font_size = 32
         self.font = ImageFont.truetype(self.font_path, self.font_size)
-
+        self.messages.append("test")
         model_path = "model-withflip.tflite"
         if not os.path.exists(model_path):
             raise ValueError(f"Model file not found at {model_path}")
@@ -44,9 +44,8 @@ class VideoProcessor(VideoTransformerBase):
             self.interpreter = tf.lite.Interpreter(model_path=model_path)
             self.interpreter.allocate_tensors()
             self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
-            st.write("Model loaded successfully.")
         except Exception as e:
-            st.error(f"Failed to load TFLite model. Error: {e}")
+            raise ValueError(f"Failed to load TFLite model. Error: {e}")
 
         self.messages = []
 
@@ -72,17 +71,10 @@ class VideoProcessor(VideoTransformerBase):
         rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
         return np.concatenate([face, lh, pose, rh])
 
-    def recv(self, frame):
+    def transform(self, frame):
         image = frame.to_ndarray(format="bgr24")
         image, results = self.mediapipe_detection(image)
         landmarks = self.extract_coordinates(results)
-        
-        # Log the detection results
-        if results.face_landmarks or results.pose_landmarks or results.left_hand_landmarks or results.right_hand_landmarks:
-            st.write("Landmarks detected.")
-        else:
-            st.write("No landmarks detected.")
-        
         self.sequence_data.append(landmarks)
 
         if len(self.sequence_data) == 30:  # Process every 30 frames
@@ -97,7 +89,6 @@ class VideoProcessor(VideoTransformerBase):
                 self.last_prediction = message
                 self.last_prediction_time = time.time()
                 self.sequence_data = []  # Reset sequence data after prediction
-                st.write(f"Prediction: {message}")
             except Exception as e:
                 st.error(f"Prediction error: {e}")
 
