@@ -9,8 +9,8 @@ import pandas as pd
 import os
 from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode
 
-# # Suppress warnings
-# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# Suppress warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Mediapipe and drawing utilities
 mp_holistic = mp.solutions.holistic
