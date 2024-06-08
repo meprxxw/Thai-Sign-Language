@@ -73,7 +73,7 @@ class VideoProcessor(VideoTransformerBase):
         rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]) if results.right_hand_landmarks else np.zeros((21, 3))
         return np.concatenate([face, lh, pose, rh])
 
-    def transform(self, frame):
+    def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
         image, results = self.mediapipe_detection(image)
         landmarks = self.extract_coordinates(results)
