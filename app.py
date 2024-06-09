@@ -75,7 +75,7 @@ def process_video(video_path, interpreter, prediction_fn, detection_confidence, 
     cap = cv2.VideoCapture(video_path)
     video_placeholder = st.empty()
 
-    font_path = "PK Maehongson Medium.ttf"  # Update the path font
+    font_path = "TH Krub.ttf"  # Update the path font
 
     with mp_holistic.Holistic(min_detection_confidence=detection_confidence, min_tracking_confidence=tracking_confidence) as holistic:
         message = ""  # Initialize message variable
