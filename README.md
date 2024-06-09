@@ -9,6 +9,9 @@ This project aims to develop a Thai Sign Language detection using a Transformer-
 ### Data Processing
 - **parquetdata_visualize.ipynb**: This notebook explains how the data was processed and visualized before being used for model training.
 
+### Detectable signs
+- The list of detectable signs can be found in the actions.txt.
+- For examples of Thai signs and their corresponding actions, you can visit https://www.th-sl.com/?openExternalBrowser=1.
 ## app 🚀
 You can try the thai sign language detection app through this link:
 
