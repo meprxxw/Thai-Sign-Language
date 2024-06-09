@@ -112,7 +112,7 @@ def intro():
 
         How to Use This Application :eyes:
         
-        1. Detector Mode 📝
+        Detector Mode 📝
         - เลือก **"Detector"** จากแถบด้านข้าง
         - สามารถเลือก configure detection และ tracking confidence, landmark drawing, และตั้งค่าสีโดยการเปิด **"Show Options"**
         - อัปโหลดวิดีโอไฟล์ เช่น MP4, MOV, AVI, or MKV
