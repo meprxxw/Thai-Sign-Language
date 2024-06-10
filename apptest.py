@@ -6,6 +6,14 @@ import tensorflow as tf
 from streamlit_webrtc import VideoTransformerBase, webrtc_streamer
 from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
+import os
+from twilio.rest import Client
+
+account_sid = os.environ['ACbd6cc0dd4dcaaceb2ad8080a4a26d1e0']
+auth_token = os.environ['7cce08ddf3d3192c088dffe0b1ef5284']
+client = Client(account_sid, auth_token)
+
+token = client.tokens.create()
 
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
@@ -208,8 +216,7 @@ def live_tsl():
     st.write('## Real-time Thai Sign Language Detection')
     st.write('---')
     webrtc_streamer(key="example", video_transformer_factory=SignLanguageTransformer , rtc_configuration={  # Add this line
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-    })
+        "iceServers": token.ice_servers})
 
 PAGES = {
     "Introduction": intro,
