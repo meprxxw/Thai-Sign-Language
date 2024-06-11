@@ -9,11 +9,11 @@ import pandas as pd
 import os
 from twilio.rest import Client
 
-account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
-auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
-client = Client(account_sid, auth_token)
+# account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
+# auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
+# client = Client(account_sid, auth_token)
 
-token = client.tokens.create()
+# token = client.tokens.create()
 
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
@@ -216,7 +216,7 @@ def live_tsl():
     st.write('## Real-time Thai Sign Language Detection')
     st.write('---')
     webrtc_streamer(key="example", video_transformer_factory=SignLanguageTransformer , rtc_configuration={  # Add this line
-        "iceServers": token.ice_servers})
+        "iceServers":[{"urls": ["stun:stun.l.google.com:19302"]}])
 
 PAGES = {
     "Introduction": intro,
