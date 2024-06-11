@@ -166,7 +166,9 @@ def intro():
     st.write(
         """
         Welcome to the Thai Sign Language (TSL) Detection Application :wave:
-
+        
+        สามารถดูคำที่ Predict ได้ที่ https://github.com/meprxxw/Thai-Sign-Language/blob/main/actions
+        และ ตัวอย่างภาษามือได้ที่ https://www.th-sl.com/?openExternalBrowser=1.
       
 
         How to Use This Application :eyes:
