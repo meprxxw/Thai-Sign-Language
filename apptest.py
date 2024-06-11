@@ -24,21 +24,13 @@ def mediapipe_detection(image, model, draw_landmarks, colors):
 
     if draw_landmarks:
         if pred.face_landmarks:
-            mp_drawing.draw_landmarks(image, pred.face_landmarks, mp_holistic.FACEMESH_TESSELATION, 
-                                      landmark_drawing_spec=mp_drawing.DrawingSpec(color=colors['face'], thickness=1, circle_radius=1),
-                                      connection_drawing_spec=mp_drawing.DrawingSpec(color=colors['face'], thickness=1))
+            mp_drawing.draw_landmarks(image, pred.face_landmarks, mp_holistic.FACEMESH_TESSELATION, landmark_drawing_spec=mp_drawing.DrawingSpec(color=colors['face'], thickness=1, circle_radius=1), connection_drawing_spec=mp_drawing.DrawingSpec(color=colors['face'], thickness=1))
         if pred.pose_landmarks:
-            mp_drawing.draw_landmarks(image, pred.pose_landmarks, mp_holistic.POSE_CONNECTIONS,
-                                      landmark_drawing_spec=mp_drawing.DrawingSpec(color=colors['pose'], thickness=2, circle_radius=2),
-                                      connection_drawing_spec=mp_drawing.DrawingSpec(color=colors['pose'], thickness=2))
+            mp_drawing.draw_landmarks(image, pred.pose_landmarks, mp_holistic.POSE_CONNECTIONS, landmark_drawing_spec=mp_drawing.DrawingSpec(color=colors['pose'], thickness=2, circle_radius=2), connection_drawing_spec=mp_drawing.DrawingSpec(color=colors['pose'], thickness=2))
         if pred.left_hand_landmarks:
-            mp_drawing.draw_landmarks(image, pred.left_hand_landmarks, mp_holistic.HAND_CONNECTIONS,
-                                      landmark_drawing_spec=mp_drawing.DrawingSpec(color=colors['left_hand'], thickness=1, circle_radius=1),
-                                      connection_drawing_spec=mp_drawing.DrawingSpec(color=colors['left_hand'], thickness=1))
+            mp_drawing.draw_landmarks(image, pred.left_hand_landmarks, mp_holistic.HAND_CONNECTIONS, landmark_drawing_spec=mp_drawing.DrawingSpec(color=colors['left_hand'], thickness=1, circle_radius=1), connection_drawing_spec=mp_drawing.DrawingSpec(color=colors['left_hand'], thickness=1))
         if pred.right_hand_landmarks:
-            mp_drawing.draw_landmarks(image, pred.right_hand_landmarks, mp_holistic.HAND_CONNECTIONS,
-                                      landmark_drawing_spec=mp_drawing.DrawingSpec(color=colors['right_hand'], thickness=1, circle_radius=1),
-                                      connection_drawing_spec=mp_drawing.DrawingSpec(color=colors['right_hand'], thickness=1))
+            mp_drawing.draw_landmarks(image, pred.right_hand_landmarks, mp_holistic.HAND_CONNECTIONS, landmark_drawing_spec=mp_drawing.DrawingSpec(color=colors['right_hand'], thickness=1, circle_radius=1), connection_drawing_spec=mp_drawing.DrawingSpec(color=colors['right_hand'], thickness=1))
 
     return image, pred
 
@@ -80,221 +72,161 @@ def draw_text_with_font(image, text, position, font_path, font_size, color):
     # Convert back to OpenCV format
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
-class SignLanguageProcessor(VideoTransformerBase):
+class SignLanguageTransformer(VideoTransformerBase):
     def __init__(self):
         self.holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self.interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
+        self.interpreter.allocate_tensors()
+        self.prediction_fn = self.interpreter.get_signature_runner("serving_default")
         self.sequence_data = []
-        self.sign = ""
-        self.colors = {
+        self.message = ""
+        self.messages = []  # List to store messages
+        self.font_path = "TH Krub.ttf"  # Update the path font
+
+    def transform(self, frame):
+        image = frame.to_ndarray(format="bgr24")
+        image, results = mediapipe_detection(image, self.holistic, True, {
             'face': (255, 255, 255),
             'pose': (255, 255, 255),
             'left_hand': (255, 255, 255),
             'right_hand': (255, 255, 255),
             'font': (255, 255, 255)
-        }
-        self.draw_landmarks = True
-        self.show_predictions_in_video = True
-
-    def update_params(self, draw_landmarks, show_predictions_in_video, colors):
-        self.draw_landmarks = draw_landmarks
-        self.show_predictions_in_video = show_predictions_in_video
-        self.colors = colors
-
-    def predict(self, frame):
-        interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
-        interpreter.allocate_tensors()
-        prediction_fn = interpreter.get_signature_runner("serving_default")
-
-        landmarks = np.array(self.sequence_data, dtype=np.float32)
-        prediction = prediction_fn(inputs=landmarks)
-        sign = np.argmax(prediction["outputs"])
-        return ORD2SIGN[sign]
-
-    def recv(self, frame):
-        image = frame.to_ndarray(format="bgr24")
-        image, results = mediapipe_detection(image, self.holistic, self.draw_landmarks, self.colors)
+        })
         landmarks = extract_coordinates(results)
         self.sequence_data.append(landmarks)
-        
+
         if len(self.sequence_data) % 30 == 0:
-            self.sign = self.predict(image)
+            prediction = self.prediction_fn(inputs=np.array(self.sequence_data, dtype=np.float32))
+            sign = np.argmax(prediction["outputs"])
+            
+            self.message = ORD2SIGN[sign]
+            self.messages.append(self.message)
+            if len(self.messages) > 5:
+                self.messages.pop(0)  # Keep only the last 5 messages
             self.sequence_data = []
 
-        if self.show_predictions_in_video and self.sign:
-            image = draw_text_with_font(image, self.sign, (10, 30), "PK Maehongson Medium.ttf", 32, self.colors['font'])
-        
+        if self.message:
+            image = draw_text_with_font(image, self.message, (10, 30), self.font_path, 32, (255, 255, 255))
+
         return image
 
-def real_time_tsl():
+def intro():
     st.write(
         """
-        This app allows you to perform real-time Thai Sign Language detection using your webcam.
+        Welcome to the Thai Sign Language (TSL) Detection Application :wave:
+
+        How to Use This Application :eyes:
+        
+        1. Detector Mode 📝
+        - เลือก **"Detector"** จากแถบด้านข้าง
+        - สามารถเลือก configure detection และ tracking confidence, landmark drawing, และตั้งค่าสีโดยการเปิด **"Show Options"**
+        - อัปโหลดวิดีโอไฟล์ เช่น MP4, MOV, AVI, or MKV
+        - ดูภาษามือที่แสดงออกมาพร้อมวิดีโอ
+        2. Live Detector :star:  (Local Host only)
+        - เลือก **"Live Detector"** จากแถบด้านข้าง
+        - สามารถเลือก landmark drawing, และตั้งค่าสีโดยการเปิด **"Show Options"**
+        - กด **"Start TSL Detection"** เพื่อเริ่ม real-time detection โดยใช้กล้อง
+        - ดูภาษามือที่แสดงออกมาในรูปแบบเรียลไทม์
+        - กด **"Stop TSL Detection"** เพื่อปิด
+
+        Features
+        - **Detection Confidence:** ปรับระดับความมั่นใจก่อนการทำนายภาษามือ
+        - **Tracking Confidence:** ปรับระดับความมั่นใจในการตรวจจับจุดที่เชื่อมกับส่วนของร่างกาย
+        - **Landmark Drawing:** เปิดการแสดงผลการตรวจจับจุดที่เชื่อมกับส่วนของร่างกาย
+        - **Color Settings:** ปรับสีที่แสดงผลของใบหน้า, ท่าทาง, มือซ้าย, มือขวา และตัวอักษรที่แสดงออกมา
         """
     )
 
-    webrtc_ctx = webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, 
-                                 video_processor_factory=SignLanguageProcessor, 
+def hex_to_rgb(hex_color):
+    """Converts hexadecimal color code to (B, G, R) format."""
+    hex_color = hex_color.lstrip('#')  # Remove '#' from the beginning
+    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    return rgb
+
+def tsl():
+    st.write(
+        """
+        This app allows you to upload a video file for Thai Sign Language detection.
+        """
+    )
+    st.write('---')
+
+    with st.sidebar.form(key="Detector"):
+        st.title('Detector Mode 📝')
+        st.write('---')
+
+        detector_mode = st.selectbox(
+            "Detector Mode", ["Upload Detector"]
+        )
+
+        with st.expander("Show Options"):
+            detection_confidence = st.slider(
+                "Detection Confidence", min_value=0.0, max_value=1.0, value=0.5
+            )
+            tracking_confidence = st.slider(
+                "Tracking Confidence", min_value=0.0, max_value=1.0, value=0.5
+            )
+            draw_landmarks = st.checkbox("Draw Landmarks", value=True)
+            st.write('---')
+
+            face_color = st.color_picker('Face Landmark Color', '#ffffff')
+            pose_color = st.color_picker('Pose Landmark Color', '#ffffff')
+            left_hand_color = st.color_picker('Left Hand Landmark Color', '#ffffff')
+            right_hand_color = st.color_picker('Right Hand Landmark Color', '#ffffff')
+            font_color = st.color_picker('Font Color', '#ffffff')
+            st.write('---')
+
+        colors = {
+            'face': hex_to_rgb(face_color),
+            'pose': hex_to_rgb(pose_color),
+            'left_hand': hex_to_rgb(left_hand_color),
+            'right_hand': hex_to_rgb(right_hand_color),
+            'font': hex_to_rgb(font_color),
+        }
+
+        submitted = st.form_submit_button("Apply Changes")
+
+    video_file = st.file_uploader("Upload a video file", type=["mp4", "mov", "avi", "mkv"])
+
+    if video_file is not None:
+        st.video(video_file)
+        with mp_holistic.Holistic(
+            min_detection_confidence=detection_confidence,
+            min_tracking_confidence=tracking_confidence
+        ) as holistic:
+            cap = cv2.VideoCapture(video_file.name)
+
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                image, results = mediapipe_detection(frame, holistic, draw_landmarks, colors)
+                st.image(image)
+
+            cap.release()
+            cv2.destroyAllWindows()
+
+def live_tsl():
+    st.write('## Real-time Thai Sign Language Detection')
+    st.write('---')
+    #webrtc_streamer(key="example", video_transformer_factory=SignLanguageTransformer)
+    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, 
+                                 video_processor_factory=SignLanguageTransformer, 
                                  rtc_configuration={"iceServers": get_ice_servers()},     
                                  video_frame_callback=callback,
                                     media_stream_constraints={"video": True, "audio": False})
 
-    if webrtc_ctx.video_processor:
-        show_options = st.checkbox("Show Options", value=False)
+PAGES = {
+    "Introduction": intro,
+    "TSL Detection": tsl,
+    "Live TSL Detection": live_tsl,
+}
 
-        if show_options:
-            draw_landmarks = st.checkbox("Draw Landmarks", value=True)
-            show_predictions_in_video = st.checkbox("Show Predictions in Video", value=True)
+st.sidebar.title('Thai Sign Language (TSL) Detection Application')
+selection = st.sidebar.selectbox("Choose a mode", list(PAGES.keys()))
+page = PAGES[selection]
+page()
 
-            face_color = st.color_picker("Face Color", value="#FFFFFF")
-            pose_color = st.color_picker("Pose Color", value="#FFFFFF")
-            left_hand_color = st.color_picker("Left Hand Color", value="#FFFFFF")
-            right_hand_color = st.color_picker("Right Hand Color", value="#FFFFFF")
-            font_color = st.color_picker("Font Color", value="#FFFFFF")
 
-            face_color_rgb = hex_to_rgb(face_color)
-            pose_color_rgb = hex_to_rgb(pose_color)
-            left_hand_color_rgb = hex_to_rgb(left_hand_color)
-            right_hand_color_rgb = hex_to_rgb(right_hand_color)
-            font_color_rgb = hex_to_rgb(font_color)
 
-            colors = {
-                'face': face_color_rgb,
-                'pose': pose_color_rgb,
-                'left_hand': left_hand_color_rgb,
-                'right_hand': right_hand_color_rgb,
-                'font': font_color_rgb
-            }
-        else:
-            draw_landmarks = True
-            show_predictions_in_video = True
-            colors = {
-                'face': (255, 255, 255),
-                'pose': (255, 255, 255),
-                'left_hand': (255, 255, 255),
-                'right_hand': (255, 255, 255),
-                'font': (255, 255, 255)
-            }
-
-        webrtc_ctx.video_processor.update_params(draw_landmarks, show_predictions_in_video, colors)
-
-def process_video(video_path, interpreter, prediction_fn, detection_confidence, tracking_confidence, draw_landmarks, show_predictions_in_video, colors):
-    sequence_data = []
-    cap = cv2.VideoCapture(video_path)
-    video_placeholder = st.empty()
-
-    font_path = "PK Maehongson Medium.ttf"
-    font_size = 32
-
-    with mp_holistic.Holistic(min_detection_confidence=detection_confidence, min_tracking_confidence=tracking_confidence) as holistic:
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            frame, results = mediapipe_detection(frame, holistic, draw_landmarks, colors)
-            sequence = extract_coordinates(results)
-            sequence_data.append(sequence)
-
-            if len(sequence_data) == 30:
-                landmarks = np.array(sequence_data, dtype=np.float32)
-                prediction = prediction_fn(inputs=landmarks)
-                sign = np.argmax(prediction["outputs"])
-                sequence_data = []
-
-            if show_predictions_in_video and len(sequence_data) % 30 == 0:
-                sign_name = ORD2SIGN[sign]
-                frame = draw_text_with_font(frame, sign_name, (10, 30), font_path, font_size, colors['font'])
-
-            video_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB")
-
-    cap.release()
-
-def hex_to_rgb(hex_color):
-    hex_color = hex_color.lstrip("#")
-    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-
-def tsl_video():
-    st.title('Sign Language Video Detection')
-
-    video_file = st.file_uploader('Upload a video file', type=['mp4', 'mov', 'avi', 'mkv'])
-    if not video_file:
-        st.warning('Please upload a video file.')
-        return
-
-    temp_video_path = 'temp_video.mp4'
-    with open(temp_video_path, 'wb') as f:
-        f.write(video_file.getvalue())
-
-    interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
-    interpreter.allocate_tensors()
-    prediction_fn = interpreter.get_signature_runner("serving_default")
-
-    show_options = st.checkbox("Show Options", value=False)
-
-    if show_options:
-        detection_confidence = st.slider('Detection Confidence', min_value=0.0, max_value=1.0, value=0.5, step=0.1)
-        tracking_confidence = st.slider('Tracking Confidence', min_value=0.0, max_value=1.0, value=0.5, step=0.1)
-        draw_landmarks = st.checkbox("Draw Landmarks", value=True)
-        show_predictions_in_video = st.checkbox("Show Predictions in Video", value=True)
-
-        face_color = st.color_picker("Face Color", value="#FFFFFF")
-        pose_color = st.color_picker("Pose Color", value="#FFFFFF")
-        left_hand_color = st.color_picker("Left Hand Color", value="#FFFFFF")
-        right_hand_color = st.color_picker("Right Hand Color", value="#FFFFFF")
-        font_color = st.color_picker("Font Color", value="#FFFFFF")
-
-        face_color_rgb = hex_to_rgb(face_color)
-        pose_color_rgb = hex_to_rgb(pose_color)
-        left_hand_color_rgb = hex_to_rgb(left_hand_color)
-        right_hand_color_rgb = hex_to_rgb(right_hand_color)
-        font_color_rgb = hex_to_rgb(font_color)
-
-        colors = {
-            'face': face_color_rgb,
-            'pose': pose_color_rgb,
-            'left_hand': left_hand_color_rgb,
-            'right_hand': right_hand_color_rgb,
-            'font': font_color_rgb
-        }
-    else:
-        detection_confidence = 0.5
-        tracking_confidence = 0.5
-        draw_landmarks = True
-        show_predictions_in_video = True
-        colors = {
-            'face': (255, 255, 255),
-            'pose': (255, 255, 255),
-            'left_hand': (255, 255, 255),
-            'right_hand': (255, 255, 255),
-            'font': (255, 255, 255)
-        }
-
-    process_video(temp_video_path, interpreter, prediction_fn, detection_confidence, tracking_confidence, draw_landmarks, show_predictions_in_video, colors)
-
-def display_train_data(train):
-    st.subheader('Training Data Preview')
-    st.write(train.head())
-
-st.set_page_config(page_title='Sign Language Detection', layout='wide')
-
-def main():
-    st.title('Sign Language Detection with MediaPipe and TensorFlow Lite')
-    st.sidebar.title('Navigation')
-    options = ['Home', 'Live Detector', 'Upload Video', 'Train Data']
-    choice = st.sidebar.radio('Select Option', options)
-
-    if choice == 'Home':
-        st.write('This application uses MediaPipe Holistic and TensorFlow Lite to perform real-time sign language detection.')
-        st.write('Select an option from the sidebar to get started.')
-
-    elif choice == 'Live Detector':
-        real_time_tsl()
-
-    elif choice == 'Upload Video':
-        tsl_video()
-
-    elif choice == 'Train Data':
-        display_train_data(train)
-
-if __name__ == '__main__':
-    main()
