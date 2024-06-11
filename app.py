@@ -123,6 +123,9 @@ def intro():
         - **Tracking Confidence:** ปรับระดับความมั่นใจในการตรวจจับจุดที่เชื่อมกับส่วนของร่างกาย
         - **Landmark Drawing:** เปิดการแสดงผลการตรวจจับจุดที่เชื่อมกับส่วนของร่างกาย
         - **Color Settings:** ปรับสีที่แสดงผลของใบหน้า, ท่าทาง, มือซ้าย, มือขวา และตัวอักษรที่แสดงออกมา
+
+        สามารถดูคำที่ Predict ได้ที่ https://github.com/meprxxw/Thai-Sign-Language/blob/main/actions
+        สามารถดูตัวอย่างภาษามือได้ที่ https://www.th-sl.com/?openExternalBrowser=1.
         """
     )
 
