@@ -216,7 +216,7 @@ def live_tsl():
     st.write('## Real-time Thai Sign Language Detection')
     st.write('---')
     webrtc_streamer(key="example", video_transformer_factory=SignLanguageTransformer , rtc_configuration={  # Add this line
-        "iceServers":[{"urls": ["stun:stun.l.google.com:19302"]}])
+        "iceServers":[{"urls": ["stun:stun.l.google.com:19302"]}]})
 
 PAGES = {
     "Introduction": intro,
