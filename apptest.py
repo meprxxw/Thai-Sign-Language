@@ -8,7 +8,7 @@ import json
 import tempfile
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode, VideoProcessorBase
 from PIL import Image, ImageDraw, ImageFont
-from turn import get_ice_servers
+from  sample_utils.turn import get_ice_servers
 
 
 mp_holistic = mp.solutions.holistic
