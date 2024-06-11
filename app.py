@@ -125,7 +125,7 @@ def intro():
         - **Color Settings:** ปรับสีที่แสดงผลของใบหน้า, ท่าทาง, มือซ้าย, มือขวา และตัวอักษรที่แสดงออกมา
 
         สามารถดูคำที่ Predict ได้ที่ https://github.com/meprxxw/Thai-Sign-Language/blob/main/actions
-        สามารถดูตัวอย่างภาษามือได้ที่ https://www.th-sl.com/?openExternalBrowser=1.
+           และ ตัวอย่างภาษามือได้ที่ https://www.th-sl.com/?openExternalBrowser=1.
         
         """
     )
