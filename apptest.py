@@ -137,8 +137,6 @@ def real_time_tsl():
                                  rtc_configuration={"iceServers": get_ice_servers()},     
                                  video_frame_callback=callback,
                                     media_stream_constraints={"video": True, "audio": False})
-,
-
 
     if webrtc_ctx.video_processor:
         show_options = st.checkbox("Show Options", value=False)
