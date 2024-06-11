@@ -1,19 +1,15 @@
+
+
 import streamlit as st
 import mediapipe as mp
 import cv2
 import numpy as np
 import tensorflow as tf
-from streamlit_webrtc import VideoTransformerBase, webrtc_streamer
-from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
-import os
-from twilio.rest import Client
-
-# account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
-# auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
-# client = Client(account_sid, auth_token)
-
-# token = client.tokens.create()
+import json
+import tempfile
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode, VideoProcessorBase
+from PIL import Image, ImageDraw, ImageFont
 
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
@@ -115,10 +111,153 @@ class SignLanguageTransformer(VideoTransformerBase):
 
         return image
 
+def real_time_tsl():
+    st.write(
+        """
+        This app allows you to perform real-time Thai Sign Language detection using your webcam.
+        """
+    )
+
+    webrtc_ctx = webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=SignLanguageTransformer,  rtc_configuration={"iceServers":[{"urls": ["stun:stun.l.google.com:19302"]}]})
+
+    if webrtc_ctx.video_processor:
+        show_options = st.checkbox("Show Options", value=False)
+
+        if show_options:
+            draw_landmarks = st.checkbox("Draw Landmarks", value=True)
+            show_predictions_in_video = st.checkbox("Show Predictions in Video", value=True)
+
+            face_color = st.color_picker("Face Color", value="#FFFFFF")
+            pose_color = st.color_picker("Pose Color", value="#FFFFFF")
+            left_hand_color = st.color_picker("Left Hand Color", value="#FFFFFF")
+            right_hand_color = st.color_picker("Right Hand Color", value="#FFFFFF")
+            font_color = st.color_picker("Font Color", value="#FFFFFF")
+
+            face_color_rgb = hex_to_rgb(face_color)
+            pose_color_rgb = hex_to_rgb(pose_color)
+            left_hand_color_rgb = hex_to_rgb(left_hand_color)
+            right_hand_color_rgb = hex_to_rgb(right_hand_color)
+            font_color_rgb = hex_to_rgb(font_color)
+
+            colors = {
+                'face': face_color_rgb,
+                'pose': pose_color_rgb,
+                'left_hand': left_hand_color_rgb,
+                'right_hand': right_hand_color_rgb,
+                'font': font_color_rgb
+            }
+        else:
+            draw_landmarks = True
+            show_predictions_in_video = True
+            colors = {
+                'face': (255, 255, 255),
+                'pose': (255, 255, 255),
+                'left_hand': (255, 255, 255),
+                'right_hand': (255, 255, 255),
+                'font': (255, 255, 255)
+            }
+
+        webrtc_ctx.video_processor.update_params(draw_landmarks, show_predictions_in_video, colors)
+
+def real_time_tsl(draw_landmarks, show_predictions_in_video, colors):
+    st.write(
+        """
+        This app allows you to perform real-time Thai Sign Language detection using your webcam.
+        """
+    )
+    interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
+    interpreter.allocate_tensors()
+    prediction_fn = interpreter.get_signature_runner("serving_default")
+
+    sequence_data = []
+    cap = cv2.VideoCapture(0)
+
+    video_placeholder = st.empty()
+    message_placeholder = st.empty()
+
+    messages = []  # List to store messages
+    
+    font_path = "PK Maehongson Medium.ttf"  # Update the path font
+
+    with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
+        message = ""  # Initialize message variable
+        while cap.isOpened() and st.session_state.run:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            image, results = mediapipe_detection(frame, holistic, draw_landmarks, colors)
+            landmarks = extract_coordinates(results)
+            sequence_data.append(landmarks)
+
+            if len(sequence_data) % 30 == 0:
+                prediction = prediction_fn(inputs=np.array(sequence_data, dtype=np.float32))
+                sign = np.argmax(prediction["outputs"])
+                
+                message = ORD2SIGN[sign]
+                messages.append(message)
+                if len(messages) > 5:
+                    messages.pop(0)  # Keep only the last 5 messages
+                sequence_data = []
+
+            if show_predictions_in_video and message:
+                image = draw_text_with_font(image, message, (10, 30), font_path, 32, colors['font'])
+
+            # Display the frame using Streamlit
+            video_placeholder.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), channels="RGB")
+            # Display messages
+            if not show_predictions_in_video:
+                message_text = " ".join(messages)  # Concatenate messages with newline
+                message_placeholder.info(message_text)
+
+            if cv2.waitKey(10) & 0xFF == ord("q"):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+def process_video(video_path, interpreter, prediction_fn, detection_confidence, tracking_confidence, draw_landmarks, show_predictions_in_video, colors):
+    sequence_data = []
+    cap = cv2.VideoCapture(video_path)
+    video_placeholder = st.empty()
+
+    font_path = "TH Krub.ttf"  # Update the path font
+
+    with mp_holistic.Holistic(min_detection_confidence=detection_confidence, min_tracking_confidence=tracking_confidence) as holistic:
+        message = ""  # Initialize message variable
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            image, results = mediapipe_detection(frame, holistic, draw_landmarks, colors)
+            landmarks = extract_coordinates(results)
+            sequence_data.append(landmarks)
+            
+            if show_predictions_in_video and sequence_data:
+                prediction = prediction_fn(inputs=np.array([sequence_data[-1]], dtype=np.float32))
+                sign = np.argmax(prediction["outputs"])
+                message = ORD2SIGN[sign]
+                image = draw_text_with_font(image, message, (10, 30), font_path, 46, colors['font'])
+
+            # Display the frame with landmarks using Streamlit
+            video_placeholder.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), channels="RGB")
+        
+        cap.release()
+    
+    if sequence_data and not show_predictions_in_video:
+        sequence_data = np.array(sequence_data, dtype=np.float32)
+        prediction = prediction_fn(inputs=sequence_data)
+        sign = np.argmax(prediction["outputs"])
+        st.info(f"Predicted Sign: {ORD2SIGN[sign]}")
+    
+
 def intro():
     st.write(
         """
         Welcome to the Thai Sign Language (TSL) Detection Application :wave:
+
+      
 
         How to Use This Application :eyes:
         
@@ -154,77 +293,132 @@ def tsl():
         This app allows you to upload a video file for Thai Sign Language detection.
         """
     )
-    st.write('---')
+    interpreter = tf.lite.Interpreter(model_path="model-withflip.tflite")
+    interpreter.allocate_tensors()
+    prediction_fn = interpreter.get_signature_runner("serving_default")
 
-    with st.sidebar.form(key="Detector"):
-        st.title('Detector Mode 📝')
-        st.write('---')
+    detection_confidence = st.slider("Detection Confidence", 0.0, 1.0, 0.5)
+    tracking_confidence = st.slider("Tracking Confidence", 0.0, 1.0, 0.5)
 
-        detector_mode = st.selectbox(
-            "Detector Mode", ["Upload Detector"]
-        )
+    # Toggle button for showing/hiding options
+    show_options = st.checkbox("Show Options", value=False)
 
-        with st.expander("Show Options"):
-            detection_confidence = st.slider(
-                "Detection Confidence", min_value=0.0, max_value=1.0, value=0.5
-            )
-            tracking_confidence = st.slider(
-                "Tracking Confidence", min_value=0.0, max_value=1.0, value=0.5
-            )
-            draw_landmarks = st.checkbox("Draw Landmarks", value=True)
-            st.write('---')
+    if show_options:
+        draw_landmarks = st.checkbox("Draw Landmarks", value=True)
+        show_predictions_in_video = st.checkbox("Show Predictions in Video", value=True)
 
-            face_color = st.color_picker('Face Landmark Color', '#ffffff')
-            pose_color = st.color_picker('Pose Landmark Color', '#ffffff')
-            left_hand_color = st.color_picker('Left Hand Landmark Color', '#ffffff')
-            right_hand_color = st.color_picker('Right Hand Landmark Color', '#ffffff')
-            font_color = st.color_picker('Font Color', '#ffffff')
-            st.write('---')
+        # Color pickers for each element
+        face_color = st.color_picker("Face Color", value="#FFFFFF")
+        pose_color = st.color_picker("Pose Color", value="#FFFFFF")
+        left_hand_color = st.color_picker("Left Hand Color", value="#FFFFFF")
+        right_hand_color = st.color_picker("Right Hand Color", value="#FFFFFF")
+        font_color = st.color_picker("Font Color", value="#FFFFFF")
+
+        # Convert hexadecimal colors to (B, G, R) format
+        face_color_rgb = hex_to_rgb(face_color)
+        pose_color_rgb = hex_to_rgb(pose_color)
+        left_hand_color_rgb = hex_to_rgb(left_hand_color)
+        right_hand_color_rgb = hex_to_rgb(right_hand_color)
+        font_color_rgb = hex_to_rgb(font_color)
 
         colors = {
-            'face': hex_to_rgb(face_color),
-            'pose': hex_to_rgb(pose_color),
-            'left_hand': hex_to_rgb(left_hand_color),
-            'right_hand': hex_to_rgb(right_hand_color),
-            'font': hex_to_rgb(font_color),
+            'face': face_color_rgb,
+            'pose': pose_color_rgb,
+            'left_hand': left_hand_color_rgb,
+            'right_hand': right_hand_color_rgb,
+            'font': font_color_rgb
+        }
+    else:
+        # Default values if options are not shown
+        draw_landmarks = True
+        show_predictions_in_video = True
+        colors = {
+            'face': (255, 255, 255),
+            'pose': (255, 255, 255),
+            'left_hand': (255, 255, 255),
+            'right_hand': (255, 255, 255),
+            'font': (255, 255, 255)
         }
 
-        submitted = st.form_submit_button("Apply Changes")
-
-    video_file = st.file_uploader("Upload a video file", type=["mp4", "mov", "avi", "mkv"])
-
+    video_file = st.file_uploader("Upload a video", type=["mp4", "mov", "avi", "mkv"])
     if video_file is not None:
-        st.video(video_file)
-        with mp_holistic.Holistic(
-            min_detection_confidence=detection_confidence,
-            min_tracking_confidence=tracking_confidence
-        ) as holistic:
-            cap = cv2.VideoCapture(video_file.name)
+        tfile = tempfile.NamedTemporaryFile(delete=False)
+        tfile.write(video_file.read())
+        process_video(tfile.name, interpreter, prediction_fn, detection_confidence, tracking_confidence, draw_landmarks, show_predictions_in_video, colors)
 
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+def main():
+    st.header("Thai Sign Language Detection")
 
-                image, results = mediapipe_detection(frame, holistic, draw_landmarks, colors)
-                st.image(image)
+    page_names_to_funcs = {
+        "—": intro,
+        "Detector 🕵️‍♀️": tsl,
+        "Live Detector 🎥": lambda: real_time_tsl(st.session_state.draw_landmarks, st.session_state.show_predictions_in_video, st.session_state.colors) if st.session_state.run else None,
+    }   
+    app_mode = st.sidebar.selectbox("Choose the app mode", page_names_to_funcs.keys())
 
-            cap.release()
-            cv2.destroyAllWindows()
+    st.subheader(app_mode)
 
-def live_tsl():
-    st.write('## Real-time Thai Sign Language Detection')
-    st.write('---')
-    webrtc_streamer(key="example", video_transformer_factory=SignLanguageTransformer , rtc_configuration={  # Add this line
-        "iceServers":[{"urls": ["stun:stun.l.google.com:19302"]}]})
+    if "run" not in st.session_state:
+        st.session_state.run = False
 
-PAGES = {
-    "Introduction": intro,
-    "TSL Detection": tsl,
-    "Live TSL Detection": live_tsl,
-}
+    if app_mode == "Live Detector 🎥":
+        if not st.session_state.run:
+            # Toggle button for showing/hiding options
+            show_options = st.checkbox("Show Options", value=False)
 
-st.sidebar.title('Thai Sign Language (TSL) Detection Application')
-selection = st.sidebar.selectbox("Choose a mode", list(PAGES.keys()))
-page = PAGES[selection]
-page()
+            if show_options:
+                draw_landmarks = st.checkbox("Draw Landmarks", value=True)
+                show_predictions_in_video = st.checkbox("Show Predictions in Video", value=True)
+
+                # Color pickers for each element
+                face_color = st.color_picker("Face Color", value="#FFFFFF")
+                pose_color = st.color_picker("Pose Color", value="#FFFFFF")
+                left_hand_color = st.color_picker("Left Hand Color", value="#FFFFFF")
+                right_hand_color = st.color_picker("Right Hand Color", value="#FFFFFF")
+                font_color = st.color_picker("Font Color", value="#FFFFFF")
+
+                # Convert hexadecimal colors to (B, G, R) format
+                face_color_rgb = hex_to_rgb(face_color)
+                pose_color_rgb = hex_to_rgb(pose_color)
+                left_hand_color_rgb = hex_to_rgb(left_hand_color)
+                right_hand_color_rgb = hex_to_rgb(right_hand_color)
+                font_color_rgb = hex_to_rgb(font_color)
+
+                colors = {
+                    'face': face_color_rgb,
+                    'pose': pose_color_rgb,
+                    'left_hand': left_hand_color_rgb,
+                    'right_hand': right_hand_color_rgb,
+                    'font': font_color_rgb
+                }
+            else:
+                # Default values if options are not shown
+                draw_landmarks = True
+                show_predictions_in_video = True
+                colors = {
+                    'face': (255, 255, 255),
+                    'pose': (255, 255, 255),
+                    'left_hand': (255, 255, 255),
+                    'right_hand': (255, 255, 255),
+                    'font': (255, 255, 255)
+                }
+
+            if st.button("Start TSL Detection", key="start_detection_button"):
+                st.session_state.run = True
+                st.session_state.colors = colors
+                st.session_state.draw_landmarks = draw_landmarks
+                st.session_state.show_predictions_in_video = show_predictions_in_video
+                st.experimental_rerun()
+        else:
+            if st.button("Stop TSL Detection", key="stop_detection_button"):
+                st.session_state.run = False
+                st.experimental_rerun()
+            real_time_tsl(st.session_state.draw_landmarks, st.session_state.show_predictions_in_video, st.session_state.colors)
+    elif app_mode == "Detector 🕵️‍♀️":
+        tsl()
+    else:
+        page_func = page_names_to_funcs[app_mode]
+        page_func()
+
+if __name__ == "__main__":
+    main()
