@@ -1,15 +1,3 @@
-import streamlit as st
-import mediapipe as mp
-import cv2
-import numpy as np
-import tensorflow as tf
-import pandas as pd
-import json
-import tempfile
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode, VideoProcessorBase
-from PIL import Image, ImageDraw, ImageFont
-from  sample_utils.turn import get_ice_servers
-
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
 
@@ -210,12 +198,7 @@ def tsl():
 def live_tsl():
     st.write('## Real-time Thai Sign Language Detection')
     st.write('---')
-    #webrtc_streamer(key="example", video_transformer_factory=SignLanguageTransformer)
-    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, 
-                                 video_processor_factory=SignLanguageTransformer, 
-                                 rtc_configuration={"iceServers": get_ice_servers()},     
-                                 video_frame_callback=callback,
-                                    media_stream_constraints={"video": True, "audio": False})
+    webrtc_streamer(key="example", video_transformer_factory=SignLanguageTransformer,"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}] )
 
 PAGES = {
     "Introduction": intro,
@@ -227,6 +210,3 @@ st.sidebar.title('Thai Sign Language (TSL) Detection Application')
 selection = st.sidebar.selectbox("Choose a mode", list(PAGES.keys()))
 page = PAGES[selection]
 page()
-
-
-
