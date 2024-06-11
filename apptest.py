@@ -8,6 +8,8 @@ import json
 import tempfile
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode, VideoProcessorBase
 from PIL import Image, ImageDraw, ImageFont
+from turn import get_ice_servers
+
 
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
@@ -116,7 +118,7 @@ def real_time_tsl():
         """
     )
 
-    webrtc_ctx = webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=SignLanguageTransformer,  rtc_configuration={"iceServers":[{"urls": ["stun:stun.l.google.com:19302"]}]})
+    webrtc_ctx = webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, video_processor_factory=SignLanguageTransformer,  rtc_configuration=get_ice_servers())
 
     if webrtc_ctx.video_processor:
         show_options = st.checkbox("Show Options", value=False)
