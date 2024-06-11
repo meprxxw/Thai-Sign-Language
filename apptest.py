@@ -9,8 +9,8 @@ import pandas as pd
 import os
 from twilio.rest import Client
 
-account_sid = os.getenv('ACbd6cc0dd4dcaaceb2ad8080a4a26d1e0')
-auth_token = os.getenv('59d5391bcd3ffaad2f7f4284600f1d5d')
+account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
+auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
 client = Client(account_sid, auth_token)
 
 token = client.tokens.create()
