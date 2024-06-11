@@ -126,6 +126,7 @@ def intro():
 
         สามารถดูคำที่ Predict ได้ที่ https://github.com/meprxxw/Thai-Sign-Language/blob/main/actions
         สามารถดูตัวอย่างภาษามือได้ที่ https://www.th-sl.com/?openExternalBrowser=1.
+        
         """
     )
 
