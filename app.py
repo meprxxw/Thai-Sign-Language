@@ -8,8 +8,14 @@ import json
 import tempfile
 from PIL import Image, ImageDraw, ImageFont
 
-mp_holistic = mp.solutions.holistic
-mp_drawing = mp.solutions.drawing_utils
+
+try:
+    import mediapipe as mp
+    mp_holistic = mp.solutions.holistic
+    mp_drawing = mp.solutions.drawing_utils
+except ImportError:
+    st.error("Failed to import MediaPipe.")
+
 
 ROWS_PER_FRAME = 543  # number of landmarks per frame
 
