@@ -1,5 +1,5 @@
 streamlit
-mediapipe
+mediapipe==0.10.0
 numpy
 tensorflow
 pandas
